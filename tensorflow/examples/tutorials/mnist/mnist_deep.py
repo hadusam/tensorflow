@@ -32,6 +32,7 @@ import sys
 from tensorflow.examples.tutorials.mnist import input_data
 
 import tensorflow as tf
+import horovod.tensorflow as hvd
 
 FLAGS = None
 
@@ -115,6 +116,9 @@ def bias_variable(shape):
 
 
 def main(_):
+  # Initialize Horovod
+  hvd.init()
+
   # Import data
   mnist = input_data.read_data_sets(FLAGS.data_dir, one_hot=True)
 
@@ -129,12 +133,19 @@ def main(_):
 
   cross_entropy = tf.reduce_mean(
       tf.nn.softmax_cross_entropy_with_logits(labels=y_, logits=y_conv))
-  train_step = tf.train.AdamOptimizer(1e-4).minimize(cross_entropy)
+  opt = tf.train.AdamOptimizer(1e-4)
+  opt = hvd.DistributedOptimizer(opt)
+  train_step = opt.minimize(cross_entropy)
   correct_prediction = tf.equal(tf.argmax(y_conv, 1), tf.argmax(y_, 1))
   accuracy = tf.reduce_mean(tf.cast(correct_prediction, tf.float32))
 
-  with tf.Session() as sess:
+  # Pin GPU to be used to process local rank (one GPU per process)
+  config = tf.ConfigProto()
+  config.gpu_options.visible_device_list = str(hvd.local_rank())
+
+  with tf.Session(config=config) as sess:
     sess.run(tf.global_variables_initializer())
+    sess.run(hvd.broadcast_global_variables(0))
     for i in range(20000):
       batch = mnist.train.next_batch(50)
       if i % 100 == 0:
